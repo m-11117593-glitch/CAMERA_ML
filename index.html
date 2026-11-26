@@ -60,6 +60,9 @@
       margin-top: 4px;
       color: #38bdf8;
     }
+    .wide {
+      grid-column: span 2;
+    }
     .total {
       grid-column: span 2;
       background: #2563eb;
@@ -101,6 +104,7 @@
     <div class="card"><span id="label-1">Car</span><strong id="count-1">0</strong></div>
     <div class="card"><span id="label-2">Firetruck</span><strong id="count-2">0</strong></div>
     <div class="card"><span id="label-3">Motorcycle</span><strong id="count-3">0</strong></div>
+    <div class="card wide"><span id="label-4">Truck</span><strong id="count-4">0</strong></div>
     <div class="card total">Total Vehicles Detected<strong id="total">0</strong></div>
   </div>
 
@@ -110,9 +114,9 @@
   </div>
 
   <script>
-    // Matches data.yaml: ['AMBULANCE', 'CAR', 'FIRETRUCK', 'MOTORCYCLE']
-    const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle"];
-    const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635"];
+    // Matches data.yaml: ['AMBULANCE', 'CAR', 'FIRETRUCK', 'MOTORCYCLE', 'TRUCK']
+    const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle", "Truck"];
+    const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635", "#c084fc"];
     const CONF_THRESHOLD = 0.25;
     const IMG_SIZE = 640; // Exact 640x640 model input & display coordinate space
 
@@ -190,14 +194,14 @@
         const predictions = outputs[session.outputNames[0]].data; // Shape: [1, 300, 6]
 
         ctx.clearRect(0, 0, IMG_SIZE, IMG_SIZE);
-        const counts = [0, 0, 0, 0];
+        const counts = [0, 0, 0, 0, 0];
 
         for (let i = 0; i < 300; i++) {
           const offset = i * 6;
           const conf = predictions[offset + 4];
           const classId = Math.round(predictions[offset + 5]);
 
-          if (conf < CONF_THRESHOLD || classId < 0 || classId > 3) continue;
+          if (conf < CONF_THRESHOLD || classId < 0 || classId >= CLASSES.length) continue;
 
           counts[classId]++;
           const x1 = predictions[offset];
