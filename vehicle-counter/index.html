@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edge Vehicle Counter</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 16px;
+      text-align: center;
+    }
+    h2 { margin: 4px 0 6px; font-size: 1.3rem; }
+    #status { color: #94a3b8; font-size: 0.9rem; margin: 0 0 12px; }
+    .viewer {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto 14px;
+      background: #000;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 2px solid #1e293b;
+    }
+    video, canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      max-width: 640px;
+      margin: 0 auto 14px;
+    }
+    .card {
+      background: #1e293b;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+    }
+    .card strong {
+      display: block;
+      font-size: 1.5rem;
+      margin-top: 4px;
+      color: #38bdf8;
+    }
+    .total {
+      grid-column: span 2;
+      background: #2563eb;
+      font-weight: 600;
+    }
+    .total strong { color: #fff; font-size: 1.8rem; }
+    .controls {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    button {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: #334155;
+      color: #fff;
+    }
+    button.primary { background: #10b981; color: #052e16; }
+  </style>
+</head>
+<body>
+  <h2>Edge Vehicle Detector</h2>
+  <p id="status">Starting camera & loading local AI model...</p>
+
+  <div class="viewer" id="viewer">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="stats">
+    <div class="card"><span id="label-0">Ambulance</span><strong id="count-0">0</strong></div>
+    <div class="card"><span id="label-1">Car</span><strong id="count-1">0</strong></div>
+    <div class="card"><span id="label-2">Firetruck</span><strong id="count-2">0</strong></div>
+    <div class="card"><span id="label-3">Motorcycle</span><strong id="count-3">0</strong></div>
+    <div class="card total">Total Vehicles Detected<strong id="total">0</strong></div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="scanBtn">Scan Now</button>
+    <button id="toggleBtn">Pause Auto (3s)</button>
+  </div>
+
+  <script>
+    // Matches data.yaml: ['AMBULANCE', 'CAR', 'FIRETRUCK', 'MOTORCYCLE']
+    const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle"];
+    const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635"];
+    const CONF_THRESHOLD = 0.45;
+    const IMG_SIZE = 640; // Change to 416 if exported with imgsz=416
+
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+
+    CLASSES.forEach((name, idx) => {
+      document.getElementById(`label-${idx}`).textContent = name;
+    });
+
+    const viewer = document.getElementById("viewer");
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const scanBtn = document.getElementById("scanBtn");
+    const toggleBtn = document.getElementById("toggleBtn");
+
+    const offscreen = document.createElement("canvas");
+    offscreen.width = IMG_SIZE;
+    offscreen.height = IMG_SIZE;
+    const offCtx = offscreen.getContext("2d");
+
+    let session = null;
+    let isRunning = true;
+    let isInferring = false;
+
+    async function init() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(resolve => (video.onloadedmetadata = resolve));
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      viewer.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+
+      statusEl.textContent = "Loading best.onnx locally...";
+      session = await ort.InferenceSession.create("./best.onnx", {
+        executionProviders: ["wasm"]
+      });
+
+      statusEl.textContent = "Ready — auto-capturing every 3 seconds";
+      await runDetection();
+
+      setInterval(() => {
+        if (isRunning) runDetection();
+      }, 3000);
+    }
+
+    async function runDetection() {
+      if (!session || isInferring || video.readyState < 2) return;
+      isInferring = true;
+      const startTime = performance.now();
+
+      try {
+        offCtx.drawImage(video, 0, 0, IMG_SIZE, IMG_SIZE);
+        const { data } = offCtx.getImageData(0, 0, IMG_SIZE, IMG_SIZE);
+        const area = IMG_SIZE * IMG_SIZE;
+        const floatData = new Float32Array(3 * area);
+
+        for (let i = 0; i < area; i++) {
+          floatData[i] = data[i * 4] / 255.0;                // R
+          floatData[i + area] = data[i * 4 + 1] / 255.0;     // G
+          floatData[i + 2 * area] = data[i * 4 + 2] / 255.0; // B
+        }
+
+        const tensor = new ort.Tensor("float32", floatData, [1, 3, IMG_SIZE, IMG_SIZE]);
+        const outputs = await session.run({ [session.inputNames[0]]: tensor });
+        const predictions = outputs[session.outputNames[0]].data; // Shape: [1, 300, 6]
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const counts = [0, 0, 0, 0];
+        const scaleX = canvas.width / IMG_SIZE;
+        const scaleY = canvas.height / IMG_SIZE;
+
+        for (let i = 0; i < 300; i++) {
+          const offset = i * 6;
+          const conf = predictions[offset + 4];
+          const classId = Math.round(predictions[offset + 5]);
+
+          if (conf < CONF_THRESHOLD || classId < 0 || classId > 3) continue;
+
+          counts[classId]++;
+          const x1 = predictions[offset] * scaleX;
+          const y1 = predictions[offset + 1] * scaleY;
+          const x2 = predictions[offset + 2] * scaleX;
+          const y2 = predictions[offset + 3] * scaleY;
+
+          ctx.strokeStyle = COLORS[classId];
+          ctx.lineWidth = Math.max(2, canvas.width / 200);
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+          const label = `${CLASSES[classId]} ${(conf * 100).toFixed(0)}%`;
+          ctx.font = `bold ${Math.max(14, canvas.width / 35)}px sans-serif`;
+          const textWidth = ctx.measureText(label).width;
+          const textY = Math.max(24, y1 - 6);
+
+          ctx.fillStyle = COLORS[classId];
+          ctx.fillRect(x1, textY - 18, textWidth + 10, 22);
+          ctx.fillStyle = "#000";
+          ctx.fillText(label, x1 + 5, textY - 2);
+        }
+
+        counts.forEach((c, idx) => (document.getElementById(`count-${idx}`).textContent = c));
+        document.getElementById("total").textContent = counts.reduce((a, b) => a + b, 0);
+
+        const ms = Math.round(performance.now() - startTime);
+        statusEl.textContent = `Scanned at ${new Date().toLocaleTimeString()} (${ms}ms on device)`;
+      } catch (err) {
+        statusEl.textContent = "Inference error: " + err.message;
+      } finally {
+        isInferring = false;
+      }
+    }
+
+    scanBtn.addEventListener("click", runDetection);
+    toggleBtn.addEventListener("click", () => {
+      isRunning = !isRunning;
+      toggleBtn.textContent = isRunning ? "Pause Auto (3s)" : "Resume Auto (3s)";
+      statusEl.textContent = isRunning ? "Auto-capturing every 3 seconds" : "Auto-scan paused";
+    });
+
+    init().catch(err => {
+      statusEl.textContent = "Camera/Model Error: " + err.message;
+    });
+  </script>
+</body>
+</html>
