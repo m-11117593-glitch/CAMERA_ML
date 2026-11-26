@@ -109,7 +109,7 @@
     // Matches data.yaml: ['AMBULANCE', 'CAR', 'FIRETRUCK', 'MOTORCYCLE']
     const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle"];
     const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635"];
-    const CONF_THRESHOLD = 0.45;
+    const CONF_THRESHOLD = 0.25;
     const IMG_SIZE = 640; // Change to 416 if exported with imgsz=416
 
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
