@@ -117,8 +117,9 @@
     // Matches data.yaml: ['AMBULANCE', 'CAR', 'FIRETRUCK', 'MOTORCYCLE', 'TRUCK']
     const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle", "Truck"];
     const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635", "#c084fc"];
-    const CONF_THRESHOLD = 0.25;
-    const IMG_SIZE = 640; // Exact 640x640 model input & display coordinate space
+    const CONF_THRESHOLD = 0.25;       // Default threshold for Ambulance, Car, Firetruck, Motorcycle
+    const TRUCK_CONF_THRESHOLD = 0.80; // Higher threshold for Truck to filter out tree false positives
+    const IMG_SIZE = 640;              // Exact 640x640 model input & display coordinate space
 
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
 
@@ -201,7 +202,11 @@
           const conf = predictions[offset + 4];
           const classId = Math.round(predictions[offset + 5]);
 
-          if (conf < CONF_THRESHOLD || classId < 0 || classId >= CLASSES.length) continue;
+          if (classId < 0 || classId >= CLASSES.length) continue;
+
+          // Require >= 80% confidence for Truck (classId 4), >= 25% for all other classes
+          const minConf = classId === 4 ? TRUCK_CONF_THRESHOLD : CONF_THRESHOLD;
+          if (conf < minConf) continue;
 
           counts[classId]++;
           const x1 = predictions[offset];
