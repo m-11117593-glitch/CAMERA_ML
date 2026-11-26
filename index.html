@@ -21,6 +21,7 @@
       position: relative;
       width: 100%;
       max-width: 640px;
+      aspect-ratio: 1 / 1;
       margin: 0 auto 14px;
       background: #000;
       border-radius: 14px;
@@ -31,6 +32,9 @@
       width: 100%;
       height: 100%;
       display: block;
+    }
+    video {
+      object-fit: cover;
     }
     canvas {
       position: absolute;
@@ -110,7 +114,7 @@
     const CLASSES = ["Ambulance", "Car", "Firetruck", "Motorcycle"];
     const COLORS = ["#facc15", "#38bdf8", "#f87171", "#a3e635"];
     const CONF_THRESHOLD = 0.25;
-    const IMG_SIZE = 640; // Change to 416 if exported with imgsz=416
+    const IMG_SIZE = 640; // Exact 640x640 model input & display coordinate space
 
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
 
@@ -118,13 +122,16 @@
       document.getElementById(`label-${idx}`).textContent = name;
     });
 
-    const viewer = document.getElementById("viewer");
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const statusEl = document.getElementById("status");
     const scanBtn = document.getElementById("scanBtn");
     const toggleBtn = document.getElementById("toggleBtn");
+
+    // Lock internal overlay canvas to exact 640x640 model resolution
+    canvas.width = IMG_SIZE;
+    canvas.height = IMG_SIZE;
 
     const offscreen = document.createElement("canvas");
     offscreen.width = IMG_SIZE;
@@ -142,10 +149,6 @@
       });
       video.srcObject = stream;
       await new Promise(resolve => (video.onloadedmetadata = resolve));
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      viewer.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
 
       statusEl.textContent = "Loading best.onnx locally...";
       session = await ort.InferenceSession.create("./best.onnx", {
@@ -166,7 +169,12 @@
       const startTime = performance.now();
 
       try {
-        offCtx.drawImage(video, 0, 0, IMG_SIZE, IMG_SIZE);
+        // Center-crop camera feed to 1:1 square so user sees 100% what the model sees
+        const side = Math.min(video.videoWidth, video.videoHeight);
+        const sx = (video.videoWidth - side) / 2;
+        const sy = (video.videoHeight - side) / 2;
+        offCtx.drawImage(video, sx, sy, side, side, 0, 0, IMG_SIZE, IMG_SIZE);
+
         const { data } = offCtx.getImageData(0, 0, IMG_SIZE, IMG_SIZE);
         const area = IMG_SIZE * IMG_SIZE;
         const floatData = new Float32Array(3 * area);
@@ -181,10 +189,8 @@
         const outputs = await session.run({ [session.inputNames[0]]: tensor });
         const predictions = outputs[session.outputNames[0]].data; // Shape: [1, 300, 6]
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, IMG_SIZE, IMG_SIZE);
         const counts = [0, 0, 0, 0];
-        const scaleX = canvas.width / IMG_SIZE;
-        const scaleY = canvas.height / IMG_SIZE;
 
         for (let i = 0; i < 300; i++) {
           const offset = i * 6;
@@ -194,17 +200,17 @@
           if (conf < CONF_THRESHOLD || classId < 0 || classId > 3) continue;
 
           counts[classId]++;
-          const x1 = predictions[offset] * scaleX;
-          const y1 = predictions[offset + 1] * scaleY;
-          const x2 = predictions[offset + 2] * scaleX;
-          const y2 = predictions[offset + 3] * scaleY;
+          const x1 = predictions[offset];
+          const y1 = predictions[offset + 1];
+          const x2 = predictions[offset + 2];
+          const y2 = predictions[offset + 3];
 
           ctx.strokeStyle = COLORS[classId];
-          ctx.lineWidth = Math.max(2, canvas.width / 200);
+          ctx.lineWidth = 3;
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
           const label = `${CLASSES[classId]} ${(conf * 100).toFixed(0)}%`;
-          ctx.font = `bold ${Math.max(14, canvas.width / 35)}px sans-serif`;
+          ctx.font = "bold 16px sans-serif";
           const textWidth = ctx.measureText(label).width;
           const textY = Math.max(24, y1 - 6);
 
